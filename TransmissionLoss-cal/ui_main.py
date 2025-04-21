@@ -17,7 +17,6 @@ from material_definitions import MATERIAL_DEFINITIONS
 calculate_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "calculate"))
 if calculate_path not in sys.path:
     sys.path.append(calculate_path)
-
 from calculation import run_simulation_from_ui
 
 class SoundInsulationUI(QMainWindow):
@@ -188,20 +187,22 @@ class SoundInsulationUI(QMainWindow):
             for name, _, field in layer.get("metadata", []):
                 text = field.text()
                 if text:
-                    print(f"[DEBUG] 읽은 입력값: name={name}, text={text}", flush=True)
                     if name == "material":
                         values[name] = text.strip()
+                    elif name == "thickness":
+                        thickness_val = float(text)
+                        layer["thickness"] = thickness_val
+                        values[name] = thickness_val
                     else:
-                        try:
-                            values[name] = float(text)
-                        except ValueError:
-                            print(f"[WARNING] '{name}' 항목에 잘못된 값 '{text}' 입력됨", flush=True)
+                        values[name] = float(text)
             layer["values"] = values
 
         for i in reversed(range(self.property_layout.count())):
             widget = self.property_layout.itemAt(i).widget()
             if widget is not None:
                 widget.setParent(None)
+
+        self.canvas.repaint()
 
     def prepare_calculation_data(self):
         if self.active_layer_index is not None:
@@ -225,27 +226,92 @@ class SoundInsulationUI(QMainWindow):
             calculation_layers.append(entry)
         return calculation_layers
 
-    def calculate_and_plot(self):
-        print("[DEBUG] calculate_and_plot 시작", flush=True)
+    def on_layer_selected(self, index):
+        if self.active_layer_index == index:
+            self.clear_property_panel()
+            self.active_layer_index = None
+            self.canvas.repaint()
+            return
         self.clear_property_panel()
+        self.active_layer_index = index
+        layer = self.layers[index]
+        material_type = layer["type"]
+        existing_values = layer.get("values", {})
+        layer["fields"] = []
+        layer["metadata"] = []
+        for prop in MATERIAL_DEFINITIONS[material_type]["properties"]:
+            label = QLabel(prop["label"])
+            field = QLineEdit()
+            if prop["name"] == "thickness":
+                field.setText(str(layer["thickness"]))
+            else:
+                if prop["name"] in existing_values:
+                    field.setText(str(existing_values[prop["name"]]))
+            self.property_layout.addWidget(label)
+            self.property_layout.addWidget(field)
+            layer["fields"].append((label, field))
+            layer["metadata"].append((prop["name"], prop["label"], field))
+        self.canvas.repaint()
+
+    def get_active_layer_index(self):
+        return self.active_layer_index
+
+    # ------------------------------------
+    # buttons at layer configuration panel
+    # linked buttons
+    # ------------------------------------
+    def add_layer(self):
+        material_type = self.layer_type_dropdown.currentText()
+        thickness = self.layer_thickness_input.text()
+        thickness_val = float(thickness)
+        layer_info = {
+            "type": material_type,
+            "thickness": thickness_val,
+            "fields": [],
+            "metadata": [],
+            "values": {}
+        }
+        self.layers.append(layer_info)
+        self.canvas.repaint()
+
+    def move_layer_left(self):
+        i = self.active_layer_index
+        if i is not None and i > 0:
+            self.layers[i - 1], self.layers[i] = self.layers[i], self.layers[i - 1]
+            self.active_layer_index -= 1
+            self.canvas.repaint()
+            self.on_layer_selected(self.active_layer_index)
+
+    def move_layer_right(self):
+        i = self.active_layer_index
+        if i is not None and i < len(self.layers) - 1:
+            self.layers[i + 1], self.layers[i] = self.layers[i], self.layers[i + 1]
+            self.active_layer_index += 1
+            self.canvas.repaint()
+            self.on_layer_selected(self.active_layer_index)
+
+    def delete_selected_layer(self):
+        if self.active_layer_index is not None and 0 <= self.active_layer_index < len(self.layers):
+            self.layers.pop(self.active_layer_index)
+            self.active_layer_index = None
+            self.canvas.repaint()
+            self.clear_property_panel()
+
+    def clear_all_layers(self):
+        self.layers.clear()
+        self.active_layer_index = None
+        self.canvas.repaint()
+        self.clear_property_panel()
+
+    def calculate_and_plot(self):
         layer_data = self.prepare_calculation_data()
 
-        try:
-            theta = float(self.theta_input.text())
-            P0 = float(self.p0_input.text())
-            T = float(self.temp_input.text())
-            RH = float(self.rh_input.text())
-        except ValueError:
-            print("[ERROR] Invalid air or angle input")
-            return
+        theta = float(self.theta_input.text())
+        P0 = float(self.p0_input.text())
+        T = float(self.temp_input.text())
+        RH = float(self.rh_input.text())
 
-        try:
-            f, TL, _ = run_simulation_from_ui(layer_data, theta_deg=theta, P0=P0, T=T, RH=RH)
-        except Exception as e:
-            print(f"[ERROR] Simulation failed: {e}", flush=True)
-            import traceback
-            traceback.print_exc()
-            return
+        f, TL, _ = run_simulation_from_ui(layer_data, theta_deg=theta, P0=P0, T=T, RH=RH)
 
         self.figure.clear()
         ax = self.figure.add_subplot(111)
@@ -268,98 +334,14 @@ class SoundInsulationUI(QMainWindow):
 
         ax.set_xlim([x_min, x_max])
         ax.set_ylim([y_min, y_max])
-
         self.canvas_plot.draw()
 
-    def add_layer(self):
-        material_type = self.layer_type_dropdown.currentText()
-        thickness = self.layer_thickness_input.text()
-        if material_type == "Select Material" or not thickness:
-            return
-        try:
-            thickness_val = float(thickness)
-        except ValueError:
-            return
-        layer_info = {
-            "type": material_type,
-            "thickness": thickness_val,
-            "widget": None,
-            "fields": [],
-            "metadata": [],
-            "values": {}
-        }
-        self.layers.append(layer_info)
-        self.canvas.repaint()
-
-    def on_layer_selected(self, index):
-        if self.active_layer_index == index:
-            self.clear_property_panel()
-            self.active_layer_index = None
-            self.canvas.repaint()
-            return
-        self.clear_property_panel()
-        self.active_layer_index = index
-        layer = self.layers[index]
-        material_type = layer["type"]
-        existing_values = layer.get("values", {})
-        layer["fields"] = []
-        layer["metadata"] = []
-        for prop in MATERIAL_DEFINITIONS[material_type]["properties"]:
-            label = QLabel(prop["label"])
-            field = QLineEdit()
-            if prop["name"] == "thickness":
-                field.setText(str(layer["thickness"]))
-                field.setReadOnly(True)
-            else:
-                if prop["name"] in existing_values:
-                    field.setText(str(existing_values[prop["name"]]))
-            self.property_layout.addWidget(label)
-            self.property_layout.addWidget(field)
-            layer["fields"].append((label, field))
-            layer["metadata"].append((prop["name"], prop["label"], field))
-        self.canvas.repaint()
-
-    def delete_selected_layer(self):
-        if self.active_layer_index is not None and 0 <= self.active_layer_index < len(self.layers):
-            self.layers.pop(self.active_layer_index)
-            self.active_layer_index = None
-            self.canvas.repaint()
-            self.clear_property_panel()
-
-    def clear_all_layers(self):
-        self.layers.clear()
-        self.active_layer_index = None
-        self.canvas.repaint()
-        self.clear_property_panel()
-
-    def move_layer_left(self):
-        i = self.active_layer_index
-        if i is not None and i > 0:
-            self.layers[i - 1], self.layers[i] = self.layers[i], self.layers[i - 1]
-            self.active_layer_index -= 1
-            self.canvas.repaint()
-            self.on_layer_selected(self.active_layer_index)
-
-    def move_layer_right(self):
-        i = self.active_layer_index
-        if i is not None and i < len(self.layers) - 1:
-            self.layers[i + 1], self.layers[i] = self.layers[i], self.layers[i + 1]
-            self.active_layer_index += 1
-            self.canvas.repaint()
-            self.on_layer_selected(self.active_layer_index)
-
-    def get_active_layer_index(self):
-        return self.active_layer_index
-
+    # ----------------------
+    # buttons at result plot
+    # linked buttons
+    # ----------------------
     def save_results(self):
-        if self.figure.axes == []:
-            print("[WARNING] No graph to save.")
-            return
-
         folder = QFileDialog.getExistingDirectory(self, "Select Folder to Save Results")
-        if not folder:
-            print("[INFO] Save canceled.")
-            return
 
         now = datetime.now()
         timestamp = now.strftime("%Y%m%d_%H%M%S")
@@ -371,32 +353,23 @@ class SoundInsulationUI(QMainWindow):
 
         # --- Save figure ---
         self.figure.savefig(image_path)
-        print(f"[INFO] Plot image saved to {image_path}")
 
         # --- Save CSV ---
-        try:
-            ax = self.figure.axes[0]
-            lines = ax.get_lines()
-            if not lines:
-                print("[WARNING] No data lines in plot.")
-                return
-            y_data = lines[0].get_ydata()
-            x_data = lines[0].get_xdata()
-            np.savetxt(csv_path, np.column_stack((x_data, y_data)), delimiter=",",
-                       header="Frequency [Hz],Transmission Loss [dB]", comments="")
-            print(f"[INFO] CSV data saved to {csv_path}")
-        except Exception as e:
-            print(f"[ERROR] Failed to save CSV: {e}")
+        ax = self.figure.axes[0]
+        lines = ax.get_lines()
+        y_data = lines[0].get_ydata()
+        x_data = lines[0].get_xdata()
+        np.savetxt(csv_path, np.column_stack((x_data, y_data)), delimiter=",",
+                    header="Frequency [Hz],Transmission Loss [dB]", comments="")
 
-        # --- Save layer info to JSON ---
+        # --- Save JSON ---
         try:
             theta = float(self.theta_input.text())
             P0 = float(self.p0_input.text())
             T = float(self.temp_input.text())
             RH = float(self.rh_input.text())
         except ValueError:
-            print("[ERROR] Invalid air or angle input during save.")
-            theta, P0, T, RH = 90.0, 101325.0, 20.0, 0.2  # fallback to defaults
+            theta, P0, T, RH = 90.0, 101325.0, 20.0, 0.2
 
         layer_data = self.prepare_calculation_data()
         additional_info = {
@@ -411,10 +384,9 @@ class SoundInsulationUI(QMainWindow):
         }
         with open(json_path, "w") as fjson:
             json.dump(save_package, fjson, indent=2)
-        print(f"[INFO] Layer & environment data saved to {json_path}")
 
     def load_results(self):
-        # --- JSON (레이어 정보) 불러오기 ---
+        # --- load JSON ---
         json_path, _ = QFileDialog.getOpenFileName(self, "Select JSON File", "", "JSON Files (*.json)")
         if not json_path:
             print("[INFO] Load canceled.")
@@ -429,7 +401,7 @@ class SoundInsulationUI(QMainWindow):
             self.temp_input.setText(str(env.get("T", 20)))
             self.rh_input.setText(str(env.get("RH", 0.2)))
 
-        # 레이어 정보 업데이트
+        # update layer info.
         self.layers.clear()
         for entry in loaded_layers:
             thickness_mm = entry.get("thickness", 0) * 1000.0
@@ -449,12 +421,8 @@ class SoundInsulationUI(QMainWindow):
         self.clear_property_panel()
         print(f"[INFO] Loaded {len(self.layers)} layers from {os.path.basename(json_path)}")
 
-        # --- CSV (그래프 데이터) 불러오기 ---
+        # --- load CSV ---
         csv_path, _ = QFileDialog.getOpenFileName(self, "Select CSV File", "", "CSV Files (*.csv)")
-        if not csv_path:
-            print("[INFO] CSV load skipped.")
-            return
-
         try:
             data = np.loadtxt(csv_path, delimiter=",", skiprows=1)
             f, TL = data[:, 0], data[:, 1]
@@ -472,25 +440,3 @@ class SoundInsulationUI(QMainWindow):
             print(f"[INFO] Plot loaded from {os.path.basename(csv_path)}")
         except Exception as e:
             print(f"[ERROR] Failed to load CSV: {e}")
-
-    def load_experiment_data(self):
-        csv_path, _ = QFileDialog.getOpenFileName(self, "Select Experimental CSV File", "", "CSV Files (*.csv)")
-        if not csv_path:
-            print("[INFO] Experiment data load canceled.")
-            return
-
-        try:
-            data = np.loadtxt(csv_path, delimiter=",", skiprows=1)
-            f_exp, TL_exp = data[:, 0], data[:, 1]
-
-            ax = self.figure.gca()
-            ax.plot(f_exp, TL_exp, linestyle='--', linewidth=2, label='Experiment', color='orange')
-            ax.set_xscale('log')
-            ax.set_xlabel('Frequency [Hz]', fontsize=12)
-            ax.set_ylabel('Transmission Loss [dB]', fontsize=12)
-            ax.grid(True, which='both', linestyle='--')
-            ax.legend()
-            self.canvas_plot.draw()
-            print(f"[INFO] Experimental data loaded from {os.path.basename(csv_path)}")
-        except Exception as e:
-            print(f"[ERROR] Failed to load experimental data: {e}")
