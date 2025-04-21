@@ -1,0 +1,56 @@
+2025.04.21
+ Overall
+- Removed debug messages that were used for error checking
+- Although the order of methods is not strictly important, rearranged method positions for clarity
+
+
+
+ def clear_property_panel(self):
+- After adding a layer, to allow thickness updates, the latest value is now reflected and repaint is added
+
+    def clear_property_panel(self):
+        if self.active_layer_index is not None:
+            layer = self.layers[self.active_layer_index]
+            values = {}
+            for name, _, field in layer.get("metadata", []):
+                text = field.text()
+                if text:
+                    if name == "material":
+                        values[name] = text.strip()
+                    elif name == "thickness":					# Now reads updated thickness even after initial input
+                        thickness_val = float(text)
+                        layer["thickness"] = thickness_val
+                        values[name] = thickness_val
+                    else:
+                        values[name] = float(text)
+            layer["values"] = values
+
+        for i in reversed(range(self.property_layout.count())):
+            widget = self.property_layout.itemAt(i).widget()
+            if widget is not None:
+                widget.setParent(None)
+
+        self.canvas.repaint()									# Repaint canvas to reflect updated thickness in visualization
+
+
+ def add_layer(self):
+- Removed unused key
+		
+		
+    def add_layer(self):
+        material_type = self.layer_type_dropdown.currentText()
+        thickness = self.layer_thickness_input.text()
+        thickness_val = float(thickness)
+        layer_info = {
+            "type": material_type,
+            "thickness": thickness_val,
+            "fields": [],										# Removed unused key: 'widget'
+            "metadata": [],
+            "values": {}
+        }
+        self.layers.append(layer_info)
+        self.canvas.repaint()
+
+
+ def load_experiment_data(self):
+- Removed since it was not used
