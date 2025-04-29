@@ -1,7 +1,7 @@
 from PyQt6.QtWidgets import (
     QMainWindow, QWidget, QGridLayout, QVBoxLayout, QHBoxLayout, QGroupBox,
-    QLabel, QLineEdit, QPushButton, QComboBox, QSizePolicy, QFileDialog
-)
+    QLabel, QLineEdit, QPushButton, QComboBox, QSizePolicy, QFileDialog, QDialog,
+    QScrollArea, QTableWidget, QTableWidgetItem)
 from PyQt6.QtCore import Qt, QSize
 import os
 import sys
@@ -19,11 +19,122 @@ if calculate_path not in sys.path:
     sys.path.append(calculate_path)
 from calculation import run_simulation_from_ui
 
+class AxisRangeDialog(QDialog):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Set Axis Range")
+        self.resize(400, 200)
+
+        layout = QVBoxLayout()
+
+        self.x_label = QLabel("X Axis Range:")
+        self.xmin_input = QLineEdit()
+        self.xmax_input = QLineEdit()
+        x_layout = QHBoxLayout()
+        x_layout.addWidget(QLabel("From:"))
+        x_layout.addWidget(self.xmin_input)
+        x_layout.addWidget(QLabel("To:"))
+        x_layout.addWidget(self.xmax_input)
+
+        layout.addWidget(self.x_label)
+        layout.addLayout(x_layout)
+
+        self.y_label = QLabel("Y Axis Range:")
+        self.ymin_input = QLineEdit()
+        self.ymax_input = QLineEdit()
+        y_layout = QHBoxLayout()
+        y_layout.addWidget(QLabel("From:"))
+        y_layout.addWidget(self.ymin_input)
+        y_layout.addWidget(QLabel("To:"))
+        y_layout.addWidget(self.ymax_input)
+
+        layout.addWidget(self.y_label)
+        layout.addLayout(y_layout)
+
+        button_layout = QHBoxLayout()
+        self.ok_button = QPushButton("OK")
+        self.cancel_button = QPushButton("Cancel")
+        self.ok_button.clicked.connect(self.accept)
+        self.cancel_button.clicked.connect(self.reject)
+        button_layout.addWidget(self.ok_button)
+        button_layout.addWidget(self.cancel_button)
+
+        layout.addLayout(button_layout)
+        self.setLayout(layout)
+
+class ManageLegendDialog(QDialog):
+    def __init__(self, graph_info_list, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Edit Graph Info")
+        self.resize(600, 400)
+        self.graph_info_list = graph_info_list
+
+        layout = QVBoxLayout()
+
+        self.table = QTableWidget(len(graph_info_list), 3)
+        self.table.setHorizontalHeaderLabels(["Legend Name", "File Name", "File Path"])
+
+        for row, info in enumerate(graph_info_list):
+            legend_item = QTableWidgetItem(info["legend"])
+            file_name_item = QTableWidgetItem(info["file_name"])
+            file_path_item = QTableWidgetItem(info["file_path"])
+
+            self.table.setItem(row, 0, legend_item)
+            self.table.setItem(row, 1, file_name_item)
+            self.table.setItem(row, 2, file_path_item)
+
+            file_name_item.setFlags(file_name_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
+            file_path_item.setFlags(file_path_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
+
+        layout.addWidget(self.table)
+
+        button_layout = QHBoxLayout()
+        self.ok_button = QPushButton("OK")
+        self.delete_button = QPushButton("Delete Selected")
+
+        self.ok_button.clicked.connect(self.accept)
+        self.delete_button.clicked.connect(self.delete_selected)
+
+        button_layout.addWidget(self.ok_button)
+        button_layout.addWidget(self.delete_button)
+
+        layout.addLayout(button_layout)
+        self.setLayout(layout)
+
+    def get_updated_legends(self):
+        updated = []
+        for row in range(self.table.rowCount()):
+            updated.append(self.table.item(row, 0).text())
+        return updated
+
+    def get_selected_rows(self):
+        return sorted(set(idx.row() for idx in self.table.selectedIndexes()), reverse=True)
+
+    def delete_selected(self):
+        rows = self.get_selected_rows()
+        if not rows:
+            return
+
+        # 테이블, graph_info_list 삭제
+        for row in rows:
+            self.table.removeRow(row)
+            del self.graph_info_list[row]
+
+        # matplotlib 그래프에서도 삭제
+        if hasattr(self.parent(), 'figure'):
+            ax = self.parent().figure.axes[0]
+            lines = ax.get_lines()
+            for idx in sorted(rows, reverse=True):
+                if idx < len(lines):
+                    lines[idx].remove()
+
+            self.parent().canvas_plot.draw()
+
 class SoundInsulationUI(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("Sound Insulation Performance")
-        self.resize(1200, 1000)
+        self.resize(1300, 1000)
 
         self.layers = []
         self.active_layer_index = None
@@ -31,27 +142,49 @@ class SoundInsulationUI(QMainWindow):
         central_widget = QWidget()
         self.setCentralWidget(central_widget)
 
-        main_layout = QHBoxLayout()
-        central_widget.setLayout(main_layout)
+        self.main_layout = QHBoxLayout()
+        central_widget.setLayout(self.main_layout)
 
+        self.init_left_panel()
+        self.init_right_panel()
+
+    def init_left_panel(self):
         left_panel = QWidget()
         left_panel.setFixedWidth(400)
         left_layout = QVBoxLayout()
         left_panel.setLayout(left_layout)
-        main_layout.addWidget(left_panel)
-
-        right_panel = QWidget()
-        right_layout = QVBoxLayout()
-        right_panel.setLayout(right_layout)
-        main_layout.addWidget(right_panel)
+        self.main_layout.addWidget(left_panel)
 
         self.layer_panel = QGroupBox("Layer Configuration and Visualization")
-        self.layer_panel.setFixedHeight(350)
+        self.layer_panel.setFixedHeight(300)
         layer_panel_layout = QVBoxLayout()
         self.layer_panel.setLayout(layer_panel_layout)
         left_layout.addWidget(self.layer_panel)
 
-        # --- 위: 재료 선택 영역 ---
+        self.init_layer_configuration(layer_panel_layout)
+
+        self.init_environment_panel(left_layout)
+
+        self.property_panel = QGroupBox("Material Properties")
+        scroll_area = QScrollArea()
+        scroll_area.setWidgetResizable(True)
+
+        scroll_content = QWidget()
+        self.property_layout = QVBoxLayout(scroll_content)
+        scroll_content.setLayout(self.property_layout)
+
+        scroll_area.setWidget(scroll_content)
+
+        property_layout = QVBoxLayout(self.property_panel)
+        property_layout.addWidget(scroll_area)
+
+        left_layout.addWidget(self.property_panel)
+
+        self.calculate_button = QPushButton("Calculate")
+        self.calculate_button.clicked.connect(self.calculate_and_plot)
+        left_layout.addWidget(self.calculate_button)
+
+    def init_layer_configuration(self, parent_layout):
         layer_config_layout = QHBoxLayout()
         self.layer_type_dropdown = QComboBox()
         self.layer_type_dropdown.addItems(["Select Material"] + list(MATERIAL_DEFINITIONS.keys()))
@@ -63,122 +196,227 @@ class SoundInsulationUI(QMainWindow):
         layer_config_layout.addWidget(self.layer_type_dropdown)
         layer_config_layout.addWidget(self.layer_thickness_input)
         layer_config_layout.addWidget(self.add_layer_button)
-        layer_panel_layout.addLayout(layer_config_layout)
+        parent_layout.addLayout(layer_config_layout)
 
-        # --- 캔버스 중심 수평 정렬 ---
         layer_visual_layout = QHBoxLayout()
         layer_visual_layout.setAlignment(Qt.AlignmentFlag.AlignVCenter)
-
         self.canvas = LayerCanvas(self.layers, self.on_layer_selected, self.get_active_layer_index)
-        layer_visual_layout.addWidget(self.canvas, alignment=Qt.AlignmentFlag.AlignVCenter)
-        layer_panel_layout.addLayout(layer_visual_layout)
+        layer_visual_layout.addWidget(self.canvas)
+        parent_layout.addLayout(layer_visual_layout)
 
-        # --- 버튼 3x2 배치 ---
+        self.init_control_buttons(parent_layout)
+
+    def init_control_buttons(self, parent_layout):
         control_buttons_layout = QGridLayout()
 
         self.move_left_button = QPushButton("◀ Move Left")
         self.move_right_button = QPushButton("Move Right ▶")
         self.delete_layer_button = QPushButton("Delete Selected")
         self.clear_layers_button = QPushButton("Clear All")
-        self.calculate_button = QPushButton("Calculate")
 
         self.move_left_button.clicked.connect(self.move_layer_left)
         self.move_right_button.clicked.connect(self.move_layer_right)
         self.delete_layer_button.clicked.connect(self.delete_selected_layer)
         self.clear_layers_button.clicked.connect(self.clear_all_layers)
-        self.calculate_button.clicked.connect(self.calculate_and_plot)
 
         control_buttons_layout.addWidget(self.move_left_button, 0, 0)
         control_buttons_layout.addWidget(self.move_right_button, 0, 1)
         control_buttons_layout.addWidget(self.delete_layer_button, 1, 0)
         control_buttons_layout.addWidget(self.clear_layers_button, 1, 1)
-        self.calculate_button.setMinimumHeight(30)
-        control_buttons_layout.addWidget(self.calculate_button, 2, 0, 1, 2)
 
-        layer_panel_layout.addLayout(control_buttons_layout)
+        parent_layout.addLayout(control_buttons_layout)
 
-        self.property_panel = QGroupBox("Material Properties")
-        self.property_layout = QVBoxLayout()
-        self.property_panel.setLayout(self.property_layout)
-        left_layout.addWidget(self.property_panel)
+    def init_environment_panel(self, parent_layout):
+        environment_panel = QGroupBox("Environmental Parameters")
+        environment_panel.setFixedHeight(100)
+        environment_layout = QGridLayout()
+
+        self.p0_input = QLineEdit()
+        self.temp_input = QLineEdit()
+        self.rh_input = QLineEdit()
+        self.theta_input = QLineEdit()
+
+        self.p0_input.setPlaceholderText("P0 [Pa]")
+        self.p0_input.setText("101325")
+        self.temp_input.setPlaceholderText("Temp [C]")
+        self.temp_input.setText("20")
+        self.rh_input.setPlaceholderText("RH (0~1)")
+        self.rh_input.setText("0.2")
+        self.theta_input.setPlaceholderText("Incident Angle [deg]")
+        self.theta_input.setText("0")
+
+        environment_layout.addWidget(QLabel("P0   [Pa]:"), 0, 0)
+        environment_layout.addWidget(self.p0_input, 0, 1)
+        environment_layout.addWidget(QLabel("T    [°C]:"), 0, 2)
+        environment_layout.addWidget(self.temp_input, 0, 3)
+        environment_layout.addWidget(QLabel("RH    [%]:"), 0, 4)
+        environment_layout.addWidget(self.rh_input, 0, 5)
+        environment_layout.addWidget(QLabel("Theta [°]:"), 1, 0)
+        environment_layout.addWidget(self.theta_input, 1, 1)
+
+        environment_panel.setLayout(environment_layout)
+        parent_layout.addWidget(environment_panel)
+
+    def init_right_panel(self):
+        right_panel = QWidget()
+        right_layout = QVBoxLayout()
+        right_panel.setLayout(right_layout)
+        self.main_layout.addWidget(right_panel)
 
         self.result_panel = QGroupBox("Result Plot")
         self.result_layout = QVBoxLayout()
         self.result_panel.setLayout(self.result_layout)
         right_layout.addWidget(self.result_panel)
 
-        self.figure = Figure(figsize=(5, 5))  # 정사각형 비율 유지
+        self.init_plot_area()
+        self.init_axis_input_panel()
+        self.init_save_load_buttons()
+
+    def init_plot_area(self):
+        self.figure = Figure(figsize=(5, 5))
         self.canvas_plot = FigureCanvas(self.figure)
         self.canvas_plot.setMinimumSize(QSize(400, 400))
         self.result_layout.addWidget(self.canvas_plot)
 
-        axis_input_layout = QGridLayout()
+    def init_axis_input_panel(self):
+        axis_button_layout = QHBoxLayout()
+        self.set_axis_range_button = QPushButton("Set Axis Range")
+        self.set_axis_range_button.clicked.connect(self.open_axis_range_dialog)
+        axis_button_layout.addWidget(self.set_axis_range_button)
+        self.result_layout.addLayout(axis_button_layout)
 
-        self.xmin_input = QLineEdit()
-        self.xmax_input = QLineEdit()
-        self.ymin_input = QLineEdit()
-        self.ymax_input = QLineEdit()
+    def open_axis_range_dialog(self):
+        dialog = AxisRangeDialog(self)
+        if dialog.exec():
+            try:
+                x_min = float(dialog.xmin_input.text())
+                x_max = float(dialog.xmax_input.text())
+                y_min = float(dialog.ymin_input.text())
+                y_max = float(dialog.ymax_input.text())
 
-        self.xmin_input.setPlaceholderText("x: from")
-        self.xmax_input.setPlaceholderText("x: to")
-        self.ymin_input.setPlaceholderText("y: from")
-        self.ymax_input.setPlaceholderText("y: to")
+                ax = self.figure.axes[0]
+                ax.set_xlim([x_min, x_max])
+                ax.set_ylim([y_min, y_max])
+                self.canvas_plot.draw()
+            except ValueError:
+                print("Invalid input for axis range.")
 
-        axis_input_layout.addWidget(QLabel("x:"), 0, 0)
-        axis_input_layout.addWidget(self.xmin_input, 0, 1)
-        axis_input_layout.addWidget(QLabel("to"), 0, 2)
-        axis_input_layout.addWidget(self.xmax_input, 0, 3)
-
-        axis_input_layout.addWidget(QLabel("y:"), 1, 0)
-        axis_input_layout.addWidget(self.ymin_input, 1, 1)
-        axis_input_layout.addWidget(QLabel("to"), 1, 2)
-        axis_input_layout.addWidget(self.ymax_input, 1, 3)
-
-        self.result_layout.addLayout(axis_input_layout)
-
-        save_load_layout = QHBoxLayout()
+    def init_save_load_buttons(self):
+        save_load_layout = QGridLayout()
 
         self.save_button = QPushButton("Save Results")
         self.save_button.clicked.connect(self.save_results)
 
-        self.load_button = QPushButton("Load Results")
-        self.load_button.clicked.connect(self.load_results)
+        self.load_graph_button = QPushButton("Load Graph (.csv)")
+        self.load_graph_button.clicked.connect(self.load_graph_csv)
 
-        save_load_layout.addWidget(self.save_button)
-        save_load_layout.addWidget(self.load_button)
+        self.load_material_button = QPushButton("Load Material (.json)")
+        self.load_material_button.clicked.connect(self.load_material_json)
+
+        self.manage_legend_button = QPushButton("Edit Graph Info")
+        self.manage_legend_button.clicked.connect(self.manage_legends)
+
+        save_load_layout.addWidget(self.save_button, 1, 0)
+        save_load_layout.addWidget(self.load_graph_button, 1, 1)
+        save_load_layout.addWidget(self.load_material_button, 1, 2)
+        save_load_layout.addWidget(self.manage_legend_button, 0, 0, 0, 3)
+
         self.result_layout.addLayout(save_load_layout)
 
-        self.theta_input = QLineEdit()
-        self.theta_input.setPlaceholderText("Incident Angle [deg]")
-        self.theta_input.setText("0")
 
-        self.p0_input = QLineEdit()
-        self.p0_input.setPlaceholderText("P0 [Pa]")
-        self.p0_input.setText("101325")
 
-        self.temp_input = QLineEdit()
-        self.temp_input.setPlaceholderText("Temp [C]")
-        self.temp_input.setText("20")
+    # ------------------------------------
+    # buttons at layer configuration panel
+    # linked buttons
+    # ------------------------------------
+    def add_layer(self):
+        material_type = self.layer_type_dropdown.currentText()
+        thickness = self.layer_thickness_input.text()
+        thickness_val = float(thickness)
+        layer_info = {
+            "type": material_type,
+            "thickness": thickness_val,
+            "fields": [],
+            "metadata": [],
+            "values": {}
+        }
+        self.layers.append(layer_info)
+        self.canvas.repaint()
 
-        self.rh_input = QLineEdit()
-        self.rh_input.setPlaceholderText("RH (0~1)")
-        self.rh_input.setText("0.2")
+    def move_layer_left(self):
+        i = self.active_layer_index
+        if i is not None and i > 0:
+            self.layers[i - 1], self.layers[i] = self.layers[i], self.layers[i - 1]
+            self.active_layer_index -= 1
+            self.canvas.repaint()
+            self.on_layer_selected(self.active_layer_index)
 
-        air_theta_group = QGroupBox("Environmental Parameters")
-        air_theta_group.setFixedHeight(100)
-        air_theta_layout = QGridLayout()
-        air_theta_layout.addWidget(QLabel("P0:"), 0, 0)
-        air_theta_layout.addWidget(self.p0_input, 0, 1)
-        air_theta_layout.addWidget(QLabel("T:"), 0, 2)
-        air_theta_layout.addWidget(self.temp_input, 0, 3)
-        air_theta_layout.addWidget(QLabel("RH:"), 0, 4)
-        air_theta_layout.addWidget(self.rh_input, 0, 5)
-        air_theta_layout.addWidget(QLabel("Theta:"), 1, 0)
-        air_theta_layout.addWidget(self.theta_input, 1, 1)
-        air_theta_layout.addWidget(QLabel("(0° ≤ Theta < 90°)"), 1, 2, 1, 2)
-        air_theta_group.setLayout(air_theta_layout)
+    def move_layer_right(self):
+        i = self.active_layer_index
+        if i is not None and i < len(self.layers) - 1:
+            self.layers[i + 1], self.layers[i] = self.layers[i], self.layers[i + 1]
+            self.active_layer_index += 1
+            self.canvas.repaint()
+            self.on_layer_selected(self.active_layer_index)
 
-        self.result_layout.insertWidget(0, air_theta_group)
+    def delete_selected_layer(self):
+        if self.active_layer_index is not None and 0 <= self.active_layer_index < len(self.layers):
+            self.layers.pop(self.active_layer_index)
+            self.active_layer_index = None
+            self.canvas.repaint()
+            self.clear_property_panel()
+
+    def clear_all_layers(self):
+        self.layers.clear()
+        self.active_layer_index = None
+        self.canvas.repaint()
+        self.clear_property_panel()
+
+    def calculate_and_plot(self):
+        layer_data = self.prepare_calculation_data()
+
+        try:
+            theta = float(self.theta_input.text())
+            P0 = float(self.p0_input.text())
+            T = float(self.temp_input.text())
+            RH = float(self.rh_input.text())
+
+            f, TL, _ = run_simulation_from_ui(layer_data, theta_deg=theta, P0=P0, T=T, RH=RH)
+
+            if f is None or TL is None:
+                print("[ERROR] Simulation failed. No graph will be plotted.")
+                return
+
+            if not self.figure.axes:
+                ax = self.figure.add_subplot(111)
+            else:
+                ax = self.figure.axes[0]
+
+            if not hasattr(self, 'calculate_counter'):
+                self.calculate_counter = 1
+            else:
+                self.calculate_counter += 1
+
+            legend_name = f'Calculate{self.calculate_counter}'
+            ax.plot(f, TL, linewidth=2, label=legend_name)
+            ax.set_xscale('log')
+            ax.grid(True, which='both', linestyle='--')
+            ax.set_xlabel('Frequency [Hz]', fontsize=12)
+            ax.set_ylabel('Transmission Loss [dB]', fontsize=12)
+            ax.legend()
+
+            if not hasattr(self, 'graph_info_list'):
+                self.graph_info_list = []
+            self.graph_info_list.append({
+                "legend": legend_name,
+                "file_name": "Generated Internally",
+                "file_path": "-"
+            })
+
+            self.canvas_plot.draw()
+
+        except Exception as e:
+            print(f"[ERROR] Failed during calculation or plotting: {e}")
 
     def clear_property_panel(self):
         if self.active_layer_index is not None:
@@ -256,86 +494,6 @@ class SoundInsulationUI(QMainWindow):
     def get_active_layer_index(self):
         return self.active_layer_index
 
-    # ------------------------------------
-    # buttons at layer configuration panel
-    # linked buttons
-    # ------------------------------------
-    def add_layer(self):
-        material_type = self.layer_type_dropdown.currentText()
-        thickness = self.layer_thickness_input.text()
-        thickness_val = float(thickness)
-        layer_info = {
-            "type": material_type,
-            "thickness": thickness_val,
-            "fields": [],
-            "metadata": [],
-            "values": {}
-        }
-        self.layers.append(layer_info)
-        self.canvas.repaint()
-
-    def move_layer_left(self):
-        i = self.active_layer_index
-        if i is not None and i > 0:
-            self.layers[i - 1], self.layers[i] = self.layers[i], self.layers[i - 1]
-            self.active_layer_index -= 1
-            self.canvas.repaint()
-            self.on_layer_selected(self.active_layer_index)
-
-    def move_layer_right(self):
-        i = self.active_layer_index
-        if i is not None and i < len(self.layers) - 1:
-            self.layers[i + 1], self.layers[i] = self.layers[i], self.layers[i + 1]
-            self.active_layer_index += 1
-            self.canvas.repaint()
-            self.on_layer_selected(self.active_layer_index)
-
-    def delete_selected_layer(self):
-        if self.active_layer_index is not None and 0 <= self.active_layer_index < len(self.layers):
-            self.layers.pop(self.active_layer_index)
-            self.active_layer_index = None
-            self.canvas.repaint()
-            self.clear_property_panel()
-
-    def clear_all_layers(self):
-        self.layers.clear()
-        self.active_layer_index = None
-        self.canvas.repaint()
-        self.clear_property_panel()
-
-    def calculate_and_plot(self):
-        layer_data = self.prepare_calculation_data()
-
-        theta = float(self.theta_input.text())
-        P0 = float(self.p0_input.text())
-        T = float(self.temp_input.text())
-        RH = float(self.rh_input.text())
-
-        f, TL, _ = run_simulation_from_ui(layer_data, theta_deg=theta, P0=P0, T=T, RH=RH)
-
-        self.figure.clear()
-        ax = self.figure.add_subplot(111)
-        ax.plot(f, TL, linewidth=2)
-        ax.set_xscale('log')
-        ax.grid(True, which='both', linestyle='--')
-        ax.set_xlabel('Frequency [Hz]', fontsize=12)
-        ax.set_ylabel('Transmission Loss [dB]', fontsize=12)
-
-        def parse_float(text, default):
-            try:
-                return float(text)
-            except ValueError:
-                return default
-
-        x_min = parse_float(self.xmin_input.text(), 100)
-        x_max = parse_float(self.xmax_input.text(), 6400)
-        y_min = parse_float(self.ymin_input.text(), 0)
-        y_max = parse_float(self.ymax_input.text(), 100)
-
-        ax.set_xlim([x_min, x_max])
-        ax.set_ylim([y_min, y_max])
-        self.canvas_plot.draw()
-
     # ----------------------
     # buttons at result plot
     # linked buttons
@@ -385,58 +543,114 @@ class SoundInsulationUI(QMainWindow):
         with open(json_path, "w") as fjson:
             json.dump(save_package, fjson, indent=2)
 
-    def load_results(self):
-        # --- load JSON ---
+    def load_material_json(self):
         json_path, _ = QFileDialog.getOpenFileName(self, "Select JSON File", "", "JSON Files (*.json)")
         if not json_path:
-            print("[INFO] Load canceled.")
+            print("[INFO] Load canceled (JSON).")
             return
 
-        with open(json_path, "r") as fjson:
-            loaded = json.load(fjson)
-            loaded_layers = loaded.get("layers", [])
-            env = loaded.get("environment", {})
+        try:
+            with open(json_path, "r") as fjson:
+                loaded = json.load(fjson)
+                loaded_layers = loaded.get("layers", [])
+                env = loaded.get("environment", {})
+
+            # 환경 변수 복원
             self.theta_input.setText(str(env.get("theta", 90)))
             self.p0_input.setText(str(env.get("P0", 101325)))
             self.temp_input.setText(str(env.get("T", 20)))
             self.rh_input.setText(str(env.get("RH", 0.2)))
 
-        # update layer info.
-        self.layers.clear()
-        for entry in loaded_layers:
-            thickness_mm = entry.get("thickness", 0) * 1000.0
-            material_type = entry.get("type", "")
-            values = {k: v for k, v in entry.items() if k not in ["thickness", "type"]}
-            self.layers.append({
-                "type": material_type,
-                "thickness": thickness_mm,
-                "widget": None,
-                "fields": [],
-                "metadata": [],
-                "values": values
-            })
+            # 레이어 복원
+            self.layers.clear()
+            for entry in loaded_layers:
+                thickness_mm = entry.get("thickness", 0) * 1000.0
+                material_type = entry.get("type", "")
+                values = {k: v for k, v in entry.items() if k not in ["thickness", "type"]}
+                self.layers.append({
+                    "type": material_type,
+                    "thickness": thickness_mm,
+                    "fields": [],
+                    "metadata": [],
+                    "values": values
+                })
 
-        self.active_layer_index = None
-        self.canvas.repaint()
-        self.clear_property_panel()
-        print(f"[INFO] Loaded {len(self.layers)} layers from {os.path.basename(json_path)}")
+            self.active_layer_index = None
+            self.canvas.repaint()
+            self.clear_property_panel()
+            print(f"[INFO] Loaded {len(self.layers)} layers from {os.path.basename(json_path)}")
+        except Exception as e:
+            print(f"[ERROR] Failed to load material JSON: {e}")
 
-        # --- load CSV ---
+    def load_graph_csv(self):
         csv_path, _ = QFileDialog.getOpenFileName(self, "Select CSV File", "", "CSV Files (*.csv)")
+        if not csv_path:
+            print("[INFO] Load canceled (CSV).")
+            return
+
         try:
             data = np.loadtxt(csv_path, delimiter=",", skiprows=1)
             f, TL = data[:, 0], data[:, 1]
 
-            self.figure.clear()
-            ax = self.figure.add_subplot(111)
-            ax.plot(f, TL, linewidth=2)
+            if not self.figure.axes:
+                ax = self.figure.add_subplot(111)
+            else:
+                ax = self.figure.axes[0]
+
+            if not hasattr(self, 'graph_counter'):
+                self.graph_counter = 1
+            else:
+                self.graph_counter += 1
+
+            legend_name = f'Data{self.graph_counter}'
+            ax.plot(f, TL, linewidth=2, label=legend_name)
             ax.set_xscale('log')
             ax.grid(True, which='both', linestyle='--')
             ax.set_xlabel('Frequency [Hz]', fontsize=12)
             ax.set_ylabel('Transmission Loss [dB]', fontsize=12)
-            ax.set_xlim([100, 6400])
-            ax.set_ylim([0, 100])
+            ax.legend()
+
+            if not hasattr(self, 'graph_info_list'):
+                self.graph_info_list = []
+            self.graph_info_list.append({
+                "legend": legend_name,
+                "file_name": os.path.basename(csv_path),
+                "file_path": csv_path
+            })
+
             self.canvas_plot.draw()
+
             print(f"[INFO] Plot loaded from {os.path.basename(csv_path)}")
+
         except Exception as e:
-            print(f"[ERROR] Failed to load CSV: {e}")
+            print(f"[ERROR] Failed to load graph CSV: {e}")
+
+    def clear_graph(self):
+        self.figure.clear()
+        self.canvas_plot.draw()
+        self.graph_counter = 0
+        self.calculate_counter = 0
+        self.graph_info_list = []
+
+    def manage_legends(self):
+        if not hasattr(self, 'graph_info_list') or not self.graph_info_list:
+            print("[INFO] No legends to manage.")
+            return
+
+        dialog = ManageLegendDialog(self.graph_info_list, self)
+        if dialog.exec():
+            updated_legends = dialog.get_updated_legends()
+
+            if not self.figure.axes:
+                print("[INFO] No active plot.")
+                return
+
+            ax = self.figure.axes[0]
+            lines = ax.get_lines()
+
+            # OK 버튼 누를 때는 이름만 변경
+            for line, new_label in zip(lines, updated_legends):
+                line.set_label(new_label)
+
+            ax.legend()
+            self.canvas_plot.draw()
