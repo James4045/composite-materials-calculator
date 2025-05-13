@@ -4,6 +4,7 @@ import numpy as np
 import json
 import copy
 import pandas as pd
+import csv
 from PyQt6.QtWidgets import (
     QMainWindow, QWidget, QGridLayout, QVBoxLayout, QHBoxLayout, QGroupBox,
     QLabel, QLineEdit, QPushButton, QComboBox, QSizePolicy, QFileDialog, QDialog,
@@ -741,40 +742,39 @@ class SoundInsulationUI(QMainWindow):
         image_path = os.path.join(folder, f"{base_name}.png")
         csv_path = os.path.join(folder, f"{base_name}.csv")
 
-        # 1. 그래프 이미지 저장
         try:
             self.figure.savefig(image_path)
             print(f"[INFO] Plot image saved to {image_path}")
         except Exception as e:
             print(f"[ERROR] Failed to save plot image: {e}")
 
-        # 2. CSV 저장 (graph_info_list 기준으로 모든 그래프 저장)
         try:
             if not hasattr(self, 'graph_info_list') or not self.graph_info_list:
                 print("[INFO] No graph to save.")
                 return
 
-            # 메타정보 키 매핑
-            key_map = {
-                "material info.": "material_info",
-                "path": "file_path",
-                "date": "date",
-                "graph name": "legend"
-            }
-
             graphs = self.graph_info_list
             max_len = max(len(g["f"]) for g in graphs)
 
-            # 메타데이터 행 구성
-            metadata_rows_fixed = {}
-            for i, (display_key, dict_key) in enumerate(key_map.items()):
-                row = []
+            # 메타데이터 작성
+            meta_rows = []
+            meta_keys = ["material_info", "file_path", "date", "legend"]
+            meta_labels = ["material info.", "path", "date", "graph name"]
+            for label, key in zip(meta_labels, meta_keys):
+                row = [label]
                 for g in graphs:
-                    row.extend([g.get(dict_key, "-"), "", ""])  # 정보 1개 + 빈칸 2개
-                metadata_rows_fixed[i] = [display_key] + row
+                    row.extend([g.get(key, "-"), "", ""])
+                meta_rows.append(row)
 
-            # 데이터 본문 구성
-            data_rows_fixed = {}
+            meta_rows.append([])  # 빈 줄
+
+            # 헤더 작성
+            header_row = []
+            for _ in graphs:
+                header_row.extend(["Frequency [Hz]", "Transmission Loss [dB]", "Absorption Coefficient"])
+
+            # 데이터 작성
+            data_rows = []
             for i in range(max_len):
                 row = []
                 for g in graphs:
@@ -782,31 +782,14 @@ class SoundInsulationUI(QMainWindow):
                         row.extend([g["f"][i], g["TL"][i], g["alpha"][i]])
                     else:
                         row.extend(["", "", ""])
-                data_rows_fixed[i] = row
+                data_rows.append(row)
 
-            # 컬럼명 구성
-            header_fixed = []
-            for g in graphs:
-                header_fixed.extend(["Frequency [Hz]", "Transmission Loss [dB]", "Absorption Coefficient"])
-            header_fixed = [""] + header_fixed
+            # 파일 저장
+            all_rows = meta_rows + [header_row] + data_rows
+            with open(csv_path, "w", newline="") as f:
+                writer = csv.writer(f)
+                writer.writerows(all_rows)
 
-            # 데이터프레임 구성
-            df_fixed = pd.DataFrame.from_dict(data_rows_fixed, orient='index')
-            df_fixed.columns = header_fixed[1:]
-
-            # 메타 행 삽입
-            for idx, meta_row in metadata_rows_fixed.items():
-                df_fixed.loc[-(4 - idx)] = meta_row[1:]
-            df_fixed.sort_index(inplace=True)
-
-            # 메타 키 열 삽입
-            meta_column = ["" for _ in range(len(df_fixed))]
-            for idx, key in zip(range(-4, 0), key_map.keys()):
-                meta_column[idx] = key
-            df_fixed.insert(0, "", meta_column)
-
-            # CSV 저장
-            df_fixed.to_csv(csv_path, index=False)
             print(f"[INFO] Plot data saved to {csv_path}")
 
         except Exception as e:
@@ -861,35 +844,73 @@ class SoundInsulationUI(QMainWindow):
             return
 
         try:
-            data = np.loadtxt(csv_path, delimiter=",", skiprows=1)
-            f = data[:, 0]
-            TL = data[:, 1] if data.shape[1] > 1 else None
-            alpha = data[:, 2] if data.shape[1] > 2 else None
+            with open(csv_path, newline='') as f:
+                reader = list(csv.reader(f))
+                lines = list(reader)
+
+            # 메타데이터 파싱 (상단 5줄 + 빈 줄)
+            meta_lines = lines[:5]
+            header_line = lines[6] if len(lines) > 6 else []
+            data_lines = lines[7:]
+            num_graphs = len(header_line) // 3
 
             if not hasattr(self, 'graph_counter'):
                 self.graph_counter = 1
             else:
                 self.graph_counter += 1
 
-            legend_name = f'Data{self.graph_counter}'
-            self.last_result_data = (f, TL, alpha)
-            self.last_result_legend = legend_name
-
-            # 기존처럼 저장
             if not hasattr(self, 'graph_info_list'):
                 self.graph_info_list = []
 
-            self.graph_info_list.append({
-                "legend": legend_name,
-                "file_name": os.path.basename(csv_path),
-                "file_path": csv_path,
-                "f": f,
-                "TL": TL,
-                "alpha": alpha
-            })
+            ax = self.figure.axes[0] if self.figure.axes else self.figure.add_subplot(111)
+            ax.clear()
 
-            self.update_graph_by_dropdown()  # 전체 그래프 다시 그림
-            print(f"[INFO] Plot loaded from {os.path.basename(csv_path)}")
+            for i in range(num_graphs):
+                f_vals, TL_vals, alpha_vals = [], [], []
+                for row in data_lines:
+                    try:
+                        f = float(row[i * 3]) if row[i * 3] else None
+                        tl = float(row[i * 3 + 1]) if row[i * 3 + 1] else None
+                        alpha = float(row[i * 3 + 2]) if row[i * 3 + 2] else None
+                        if f is not None and tl is not None and alpha is not None:
+                            f_vals.append(f)
+                            TL_vals.append(tl)
+                            alpha_vals.append(alpha)
+                    except (IndexError, ValueError):
+                        continue
+
+                legend = meta_lines[3][i * 3 + 1] if len(meta_lines[3]) > i * 3 + 1 else f"Data{self.graph_counter}"
+                material_info = meta_lines[0][i * 3 + 1] if len(meta_lines[0]) > i * 3 + 1 else "-"
+                file_path = meta_lines[1][i * 3 + 1] if len(meta_lines[1]) > i * 3 + 1 else csv_path
+                date = meta_lines[2][i * 3 + 1] if len(meta_lines[2]) > i * 3 + 1 else "-"
+
+                self.graph_info_list.append({
+                    "legend": legend,
+                    "material_info": material_info,
+                    "file_path": file_path,
+                    "date": date,
+                    "f": f_vals,
+                    "TL": TL_vals,
+                    "alpha": alpha_vals
+                })
+
+                selected_graph = self.graph_type_dropdown.currentText()
+                y_data = TL_vals if selected_graph == "Transmission Loss" else alpha_vals
+                y_label = "Transmission Loss [dB]" if selected_graph == "Transmission Loss" else "Absorption Coefficient"
+
+                ax.plot(f_vals, y_data, linewidth=2, label=legend)
+
+            ax.set_xscale('log')
+            ax.grid(True, which='both', linestyle='--')
+            ax.set_xlabel('Frequency [Hz]', fontsize=12)
+            ax.set_ylabel(y_label, fontsize=12)
+            ax.legend()
+
+            self.last_result_data = (f_vals, TL_vals, alpha_vals)
+            self.last_result_legend = legend
+
+            self.canvas_plot.draw()
+            print(f"[INFO] Loaded {num_graphs} graphs from {os.path.basename(csv_path)}")
 
         except Exception as e:
             print(f"[ERROR] Failed to load graph CSV: {e}")
