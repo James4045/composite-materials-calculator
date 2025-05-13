@@ -41,7 +41,7 @@ def map_type(elastic_type):
         return "fluid"
 
 def run_simulation_from_ui(layer_data: list, theta_deg=0, P0=101325, T=20, RH=0.2):
-    f = np.logspace(np.log10(100), np.log10(6400), 1000)
+    f = np.logspace(np.log10(100), np.log10(10000), 5000)
     w = 2 * np.pi * f
     theta = np.radians(theta_deg)
 
@@ -78,6 +78,7 @@ def run_simulation_from_ui(layer_data: list, theta_deg=0, P0=101325, T=20, RH=0.
             BC[i, 0], BC[i, 1] = bc_matrix(mat1, mat2)
 
     tc = np.zeros(len(w), dtype=np.complex128)
+    rc = np.zeros(len(w), dtype=np.complex128)
     TM_all = np.zeros((2, 2, len(w)), dtype=np.complex128)
 
     for i_freq, wi in enumerate(w):
@@ -122,7 +123,11 @@ def run_simulation_from_ui(layer_data: list, theta_deg=0, P0=101325, T=20, RH=0.
 
         total_d = sum(m["h"] for k, m in material_map.items() if not k.startswith("fluid"))
         denom = (TM_total[0, 0] + TM_total[0, 1] * np.cos(theta) / z0 + TM_total[1, 0] * z0 / np.cos(theta) + TM_total[1, 1])
+
         tc[i_freq] = 0 if np.abs(denom) < 1e-12 else 2 * np.exp(1j * wi * total_d * np.cos(theta) / c0) / denom
+        rc[i_freq] = (TM_total[0, 0] + TM_total[0, 1] * np.cos(theta) / z0 - TM_total[1, 0] * z0 / np.cos(theta) - TM_total[1, 1]) / denom if np.abs(denom) >= 1e-12 else 0
 
     TL = 20 * np.log10(1 / np.abs(tc))
-    return f, TL, tc
+    alpha = 1 - np.abs(rc)**2
+
+    return f, TL, alpha, tc, rc
