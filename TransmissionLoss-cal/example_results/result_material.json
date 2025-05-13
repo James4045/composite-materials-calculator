@@ -1,0 +1,37 @@
+{
+  "layers": [
+    {
+      "type": "Poro-elastic",
+      "thickness": 30.0,
+      "values": {
+        "thickness": 30.0,
+        "viscous_cl": 0.000199,
+        "thermal_cl": 0.000445,
+        "airflow_resistivity": 13100.0,
+        "tortuosity": 1.0,
+        "porosity": 0.99,
+        "youngs_modulus": 132000.0,
+        "loss_factor": 0.08,
+        "poissons_ratio": 0.33,
+        "density": 10.3
+      }
+    },
+    {
+      "type": "Viscoelastic",
+      "thickness": 1.0,
+      "values": {
+        "thickness": 1.0,
+        "youngs_modulus": 70000000000.0,
+        "loss_factor": 0.003,
+        "poissons_ratio": 0.33,
+        "density": 2700.0
+      }
+    }
+  ],
+  "environment": {
+    "theta": 0.0,
+    "P0": 101325.0,
+    "T": 20.0,
+    "RH": 0.2
+  }
+}
